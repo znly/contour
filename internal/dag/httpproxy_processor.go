@@ -25,6 +25,7 @@ import (
 	"github.com/projectcontour/contour/internal/status"
 	"github.com/projectcontour/contour/internal/timeout"
 	"github.com/projectcontour/contour/pkg/config"
+	log "github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -507,13 +508,16 @@ func (p *HTTPProxyProcessor) computeRoutes(
 					"service %q: port must be in the range 1-65535", service.Name)
 				return nil
 			}
-			m := types.NamespacedName{Name: service.Name, Namespace: proxy.Namespace}
+
+			m := types.NamespacedName{Name: service.Name, Namespace: service.Namespace}
 			s, err := p.dag.EnsureService(m, intstr.FromInt(service.Port), p.source)
 			if err != nil {
+				log.WithField("hack_zone", "clients").WithField("resource", service.Name+"/"+service.Namespace).Error("service not found")
 				validCond.AddErrorf(contour_api_v1.ConditionTypeServiceError, "ServiceUnresolvedReference",
 					"Spec.Routes unresolved service reference: %s", err)
 				return nil
 			}
+			log.WithField("hack_zone", "clients").WithField("resource", service.Name+"/"+service.Namespace).Info("service found")
 
 			// Determine the protocol to use to speak to this Cluster.
 			protocol, err := getProtocol(service, s)

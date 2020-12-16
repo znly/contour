@@ -109,6 +109,7 @@ func registerServe(app *kingpin.Application) (*kingpin.CmdClause, *serveContext)
 
 	serve.Flag("incluster", "Use in cluster configuration.").BoolVar(&ctx.Config.InCluster)
 	serve.Flag("kubeconfig", "Path to kubeconfig (if not in running inside a cluster).").StringVar(&ctx.Config.Kubeconfig)
+	serve.Flag("external-kubeconfig", "Path to kubeconfig (if not in running inside a cluster).").StringVar(&ctx.Config.ExternalKubeconfig)
 
 	serve.Flag("xds-address", "xDS gRPC API address.").StringVar(&ctx.xdsAddr)
 	serve.Flag("xds-port", "xDS gRPC API port.").IntVar(&ctx.xdsPort)
@@ -191,6 +192,11 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 	clients, err := k8s.NewClients(ctx.Config.Kubeconfig, ctx.Config.InCluster)
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes clients: %w", err)
+	}
+
+	externalClients, err := k8s.NewClients(ctx.Config.ExternalKubeconfig, ctx.Config.InCluster)
+	if err != nil {
+		return fmt.Errorf("failed to create Kubernetes external clients: %w", err)
 	}
 
 	// Validate that Contour CRDs have been updated to v1.
@@ -362,7 +368,13 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 
 	// Inform on DefaultResources.
 	for _, r := range k8s.DefaultResources() {
-		inf, err := clients.InformerForResource(r)
+		c := clients
+		if r.Resource == "services" {
+			c = externalClients
+			log.WithField("hack_zone", "clients").Info("Using External Clients for services")
+		}
+
+		inf, err := c.InformerForResource(r)
 		if err != nil {
 			log.WithError(err).WithField("resource", r).Fatal("failed to create informer")
 		}
@@ -393,14 +405,15 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 			handler = k8s.NewNamespaceFilter(informerNamespaces, &dynamicHandler)
 		}
 
-		if err := informOnResource(clients, r, handler); err != nil {
+		if err := informOnResource(externalClients, r, handler); err != nil {
 			log.WithError(err).WithField("resource", r).Fatal("failed to create informer")
 		}
+		log.WithField("hack_zone", "clients").Info("using external_clients for secrets")
 	}
 
 	// Inform on endpoints.
 	for _, r := range k8s.EndpointsResources() {
-		if err := informOnResource(clients, r, &k8s.DynamicClientHandler{
+		if err := informOnResource(externalClients, r, &k8s.DynamicClientHandler{
 			Next: &contour.EventRecorder{
 				Next:    endpointHandler,
 				Counter: contourMetrics.EventHandlerOperations,
@@ -410,6 +423,7 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 		}); err != nil {
 			log.WithError(err).WithField("resource", r).Fatal("failed to create informer")
 		}
+		log.WithField("hack_zone", "clients").Info("using external_clients for endpoints")
 	}
 
 	// Set up workgroup runner and register informers.
@@ -424,6 +438,20 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 
 		if err := clients.StartInformers(stop); err != nil {
 			log.WithError(err).Error("failed to start informers")
+		}
+
+		<-stop
+		return nil
+	})
+
+	g.Add(func(stop <-chan struct{}) error {
+		log := log.WithField("context", "informers")
+
+		log.WithField("hack_zone", "informers").Info("starting external informers")
+		defer log.Println("stopped informers")
+
+		if err := externalClients.StartInformers(stop); err != nil {
+			log.WithError(err).WithField("hack_zone", "informers").Error("failed to start external informers")
 		}
 
 		<-stop
@@ -538,7 +566,7 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 				handler = k8s.NewNamespaceFilter([]string{ctx.Config.EnvoyServiceNamespace}, handler)
 			}
 
-			if err := informOnResource(clients, r, handler); err != nil {
+			if err := informOnResource(externalClients, r, handler); err != nil {
 				log.WithError(err).WithField("resource", r).Fatal("failed to create informer")
 			}
 		}
@@ -556,6 +584,11 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 			return errors.New("informer cache failed to sync")
 		}
 		log.Printf("informer caches synced")
+
+		if !externalClients.WaitForCacheSync(stop) {
+			return errors.New("external informer cache failed to sync")
+		}
+		log.Printf("external informer caches synced")
 
 		grpcServer := xds.NewServer(registry, ctx.grpcOptions(log)...)
 

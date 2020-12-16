@@ -362,6 +362,10 @@ type Service struct {
 	// Name is the name of Kubernetes service to proxy traffic.
 	// Names defined here will be used to look up corresponding endpoints which contain the ips to route.
 	Name string `json:"name"`
+
+	// Namespace defined here will be used in cunjunction with Name to look up the right external service.
+	Namespace string `json:"namespace"`
+
 	// Port (defined as Integer) to proxy traffic to since a service can have multiple defined.
 	//
 	// +required
