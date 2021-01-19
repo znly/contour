@@ -405,10 +405,13 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 			handler = k8s.NewNamespaceFilter(informerNamespaces, &dynamicHandler)
 		}
 
-		if err := informOnResource(externalClients, r, handler); err != nil {
+		// if err := informOnResource(externalClients, r, handler); err != nil {
+		// 	log.WithError(err).WithField("resource", r).Fatal("failed to create informer")
+		// }
+		if err := informOnResource(clients, r, handler); err != nil {
 			log.WithError(err).WithField("resource", r).Fatal("failed to create informer")
 		}
-		log.WithField("hack_zone", "clients").Info("using external_clients for secrets")
+		log.WithField("hack_zone", "clients").Info("TEMP fall back to clients for secrets")
 	}
 
 	// Inform on endpoints.
