@@ -16,6 +16,7 @@ package dag
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	contour_api_v1 "github.com/projectcontour/contour/apis/projectcontour/v1"
@@ -300,6 +301,15 @@ func (p *HTTPProxyProcessor) computeHTTPProxy(proxy *contour_api_v1.HTTPProxy) {
 		return
 	}
 	insecure.CORSPolicy = cp
+
+	rlp, err := rateLimitPolicy(proxy.Spec.VirtualHost.RateLimitPolicy)
+	if err != nil {
+		validCond.AddErrorf(contour_api_v1.ConditionTypeRouteError, "RateLimitPolicyNotValid",
+			"Spec.VirtualHost.RateLimitPolicy is invalid: %s", err)
+		return
+	}
+	insecure.RateLimitPolicy = rlp
+
 	addRoutes(insecure, routes)
 
 	// if TLS is enabled for this virtual host and there is no tcp proxy defined,
@@ -307,6 +317,15 @@ func (p *HTTPProxyProcessor) computeHTTPProxy(proxy *contour_api_v1.HTTPProxy) {
 	if tlsEnabled && proxy.Spec.TCPProxy == nil {
 		secure := p.dag.EnsureSecureVirtualHost(host)
 		secure.CORSPolicy = cp
+
+		rlp, err := rateLimitPolicy(proxy.Spec.VirtualHost.RateLimitPolicy)
+		if err != nil {
+			validCond.AddErrorf(contour_api_v1.ConditionTypeRouteError, "RateLimitPolicyNotValid",
+				"Spec.VirtualHost.RateLimitPolicy is invalid: %s", err)
+			return
+		}
+		secure.RateLimitPolicy = rlp
+
 		addRoutes(secure, routes)
 	}
 }
@@ -388,6 +407,10 @@ func (p *HTTPProxyProcessor) computeRoutes(
 		delete(p.orphaned, types.NamespacedName{Name: includedProxy.Name, Namespace: includedProxy.Namespace})
 	}
 
+	dynamicHeaders := map[string]string{
+		"CONTOUR_NAMESPACE": proxy.Namespace,
+	}
+
 	for _, route := range proxy.Spec.Routes {
 		if err := pathMatchConditionsValid(route.Conditions); err != nil {
 			validCond.AddErrorf(contour_api_v1.ConditionTypeRouteError, "PathMatchConditionsNotValid",
@@ -404,14 +427,14 @@ func (p *HTTPProxyProcessor) computeRoutes(
 			return nil
 		}
 
-		reqHP, err := headersPolicyRoute(route.RequestHeadersPolicy, true /* allow Host */)
+		reqHP, err := headersPolicyRoute(route.RequestHeadersPolicy, true /* allow Host */, dynamicHeaders)
 		if err != nil {
 			validCond.AddErrorf(contour_api_v1.ConditionTypeRouteError, "RequestHeadersPolicyInvalid",
 				"%s on request headers", err)
 			return nil
 		}
 
-		respHP, err := headersPolicyRoute(route.ResponseHeadersPolicy, false /* disallow Host */)
+		respHP, err := headersPolicyRoute(route.ResponseHeadersPolicy, false /* disallow Host */, dynamicHeaders)
 		if err != nil {
 			validCond.AddErrorf(contour_api_v1.ConditionTypeRouteError, "ResponseHeaderPolicyInvalid",
 				"%s on response headers", err)
@@ -431,6 +454,15 @@ func (p *HTTPProxyProcessor) computeRoutes(
 			return nil
 		}
 
+		rlp, err := rateLimitPolicy(route.RateLimitPolicy)
+		if err != nil {
+			validCond.AddErrorf(contour_api_v1.ConditionTypeRouteError, "RateLimitPolicyNotValid",
+				"route.rateLimitPolicy is invalid: %s", err)
+			return nil
+		}
+
+		requestHashPolicies, lbPolicy := loadBalancerRequestHashPolicies(route.LoadBalancerPolicy, validCond)
+
 		r := &Route{
 			PathMatchCondition:    mergePathMatchConditions(conds),
 			HeaderMatchConditions: mergeHeaderMatchConditions(conds),
@@ -440,6 +472,8 @@ func (p *HTTPProxyProcessor) computeRoutes(
 			RetryPolicy:           retryPolicy(route.RetryPolicy),
 			RequestHeadersPolicy:  reqHP,
 			ResponseHeadersPolicy: respHP,
+			RateLimitPolicy:       rlp,
+			RequestHashPolicies:   requestHashPolicies,
 		}
 
 		// If the enclosing root proxy enabled authorization,
@@ -537,14 +571,17 @@ func (p *HTTPProxyProcessor) computeRoutes(
 				}
 			}
 
-			reqHP, err := headersPolicyService(service.RequestHeadersPolicy)
+			dynamicHeaders["CONTOUR_SERVICE_NAME"] = service.Name
+			dynamicHeaders["CONTOUR_SERVICE_PORT"] = strconv.Itoa(service.Port)
+
+			reqHP, err := headersPolicyService(service.RequestHeadersPolicy, dynamicHeaders)
 			if err != nil {
 				validCond.AddErrorf(contour_api_v1.ConditionTypeServiceError, "RequestHeadersPolicyInvalid",
 					"%s on request headers", err)
 				return nil
 			}
 
-			respHP, err := headersPolicyService(service.ResponseHeadersPolicy)
+			respHP, err := headersPolicyService(service.ResponseHeadersPolicy, dynamicHeaders)
 			if err != nil {
 				validCond.AddErrorf(contour_api_v1.ConditionTypeServiceError, "ResponseHeadersPolicyInvalid",
 					"%s on response headers", err)
@@ -563,7 +600,7 @@ func (p *HTTPProxyProcessor) computeRoutes(
 
 			c := &Cluster{
 				Upstream:              s,
-				LoadBalancerPolicy:    loadBalancerPolicy(route.LoadBalancerPolicy),
+				LoadBalancerPolicy:    lbPolicy,
 				Weight:                uint32(service.Weight),
 				HTTPHealthCheckPolicy: httpHealthCheckPolicy(route.HealthCheckPolicy),
 				UpstreamValidation:    uv,
@@ -621,6 +658,16 @@ func (p *HTTPProxyProcessor) processHTTPProxyTCPProxy(validCond *contour_api_v1.
 		return false
 	}
 
+	lbPolicy := loadBalancerPolicy(tcpproxy.LoadBalancerPolicy)
+	switch lbPolicy {
+	case LoadBalancerPolicyCookie, LoadBalancerPolicyRequestHash:
+		validCond.AddWarningf(contour_api_v1.ConditionTypeTCPProxyError, "IgnoredField",
+			"ignoring field %q; %s load balancer policy is not supported for TCPProxies",
+			"Spec.TCPProxy.LoadBalancerPolicy", lbPolicy)
+		// Reset load balancer policy to ensure the default.
+		lbPolicy = ""
+	}
+
 	if len(tcpproxy.Services) > 0 {
 		var proxy TCPProxy
 		for _, service := range httpproxy.Spec.TCPProxy.Services {
@@ -634,7 +681,7 @@ func (p *HTTPProxyProcessor) processHTTPProxyTCPProxy(validCond *contour_api_v1.
 			proxy.Clusters = append(proxy.Clusters, &Cluster{
 				Upstream:             s,
 				Protocol:             s.Protocol,
-				LoadBalancerPolicy:   loadBalancerPolicy(tcpproxy.LoadBalancerPolicy),
+				LoadBalancerPolicy:   lbPolicy,
 				TCPHealthCheckPolicy: tcpHealthCheckPolicy(tcpproxy.HealthCheckPolicy),
 			})
 		}
@@ -709,7 +756,8 @@ func (p *HTTPProxyProcessor) validHTTPProxies() []*contour_api_v1.HTTPProxy {
 			valid = append(valid, proxy)
 			continue
 		}
-		fqdnHTTPProxies[proxy.Spec.VirtualHost.Fqdn] = append(fqdnHTTPProxies[proxy.Spec.VirtualHost.Fqdn], proxy)
+		fqdn := strings.ToLower(proxy.Spec.VirtualHost.Fqdn)
+		fqdnHTTPProxies[fqdn] = append(fqdnHTTPProxies[fqdn], proxy)
 	}
 
 	for fqdn, proxies := range fqdnHTTPProxies {

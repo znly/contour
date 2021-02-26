@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	serviceapis "sigs.k8s.io/service-apis/api/v1alpha1"
+	serviceapis "sigs.k8s.io/service-apis/apis/v1alpha1"
 )
 
 func TestKubernetesCacheInsert(t *testing.T) {
@@ -646,15 +646,6 @@ func TestKubernetesCacheInsert(t *testing.T) {
 			},
 			want: true,
 		},
-		"insert service-apis Gatewayclass": {
-			obj: &serviceapis.GatewayClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "gatewayclass",
-					Namespace: "default",
-				},
-			},
-			want: true,
-		},
 		"insert service-apis Gateway": {
 			obj: &serviceapis.Gateway{
 				ObjectMeta: metav1.ObjectMeta{
@@ -673,10 +664,19 @@ func TestKubernetesCacheInsert(t *testing.T) {
 			},
 			want: true,
 		},
-		"insert service-apis TcPRoute": {
-			obj: &serviceapis.TcpRoute{
+		"insert service-apis TLSRoute": {
+			obj: &serviceapis.TLSRoute{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "tcproute",
+					Name:      "tlsroute",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"insert service-apis BackendPolicy": {
+			obj: &serviceapis.BackendPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "backendpolicy",
 					Namespace: "default",
 				},
 			},
@@ -841,21 +841,6 @@ func TestKubernetesCacheRemove(t *testing.T) {
 			},
 			want: false,
 		},
-		"remove service-apis Gatewayclass": {
-			cache: cache(&serviceapis.GatewayClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "gatewayclass",
-					Namespace: "default",
-				},
-			}),
-			obj: &serviceapis.GatewayClass{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "gatewayclass",
-					Namespace: "default",
-				},
-			},
-			want: true,
-		},
 		"remove service-apis Gateway": {
 			cache: cache(&serviceapis.Gateway{
 				ObjectMeta: metav1.ObjectMeta{
@@ -886,16 +871,31 @@ func TestKubernetesCacheRemove(t *testing.T) {
 			},
 			want: true,
 		},
-		"remove service-apis TcpRoute": {
-			cache: cache(&serviceapis.TcpRoute{
+		"remove service-apis TLSRoute": {
+			cache: cache(&serviceapis.TLSRoute{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "tcproute",
+					Name:      "tlsroute",
 					Namespace: "default",
 				},
 			}),
-			obj: &serviceapis.TcpRoute{
+			obj: &serviceapis.TLSRoute{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "tcproute",
+					Name:      "tlsroute",
+					Namespace: "default",
+				},
+			},
+			want: true,
+		},
+		"remove service-apis BackendPolicy": {
+			cache: cache(&serviceapis.BackendPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "backendpolicy",
+					Namespace: "default",
+				},
+			}),
+			obj: &serviceapis.BackendPolicy{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "backendpolicy",
 					Namespace: "default",
 				},
 			},

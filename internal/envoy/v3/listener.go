@@ -26,6 +26,7 @@ import (
 	envoy_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	envoy_compressor_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/compressor/v3"
 	envoy_config_filter_http_ext_authz_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_authz/v3"
+	envoy_config_filter_http_local_ratelimit_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/local_ratelimit/v3"
 	lua "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/lua/v3"
 	envoy_extensions_filters_http_router_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
@@ -150,6 +151,7 @@ type httpConnectionManagerBuilder struct {
 	connectionShutdownGracePeriod timeout.Setting
 	filters                       []*http.HttpFilter
 	codec                         HTTPVersionType // Note the zero value is AUTO, which is the default we want.
+	allowChunkedLength            bool
 }
 
 // RouteConfigName sets the name of the RDS element that contains
@@ -211,6 +213,11 @@ func (b *httpConnectionManagerBuilder) ConnectionShutdownGracePeriod(timeout tim
 	return b
 }
 
+func (b *httpConnectionManagerBuilder) AllowChunkedLength(enabled bool) *httpConnectionManagerBuilder {
+	b.allowChunkedLength = enabled
+	return b
+}
+
 func (b *httpConnectionManagerBuilder) DefaultFilters() *httpConnectionManagerBuilder {
 
 	// Add a default set of ordered http filters.
@@ -244,6 +251,18 @@ func (b *httpConnectionManagerBuilder) DefaultFilters() *httpConnectionManagerBu
 				TypedConfig: &any.Any{
 					TypeUrl: HTTPFilterCORS,
 				},
+			},
+		},
+		&http.HttpFilter{
+			Name: "local_ratelimit",
+			ConfigType: &http.HttpFilter_TypedConfig{
+				TypedConfig: protobuf.MustMarshalAny(
+					&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+						StatPrefix: "http",
+						// since no token bucket is defined here, the filter is disabled
+						// globally but can be enabled on a per-vhost/route basis.
+					},
+				),
 			},
 		},
 		&http.HttpFilter{
@@ -327,7 +346,7 @@ func (b *httpConnectionManagerBuilder) Validate() error {
 // Get returns a new http.HttpConnectionManager filter, constructed
 // from the builder settings.
 //
-// See https://www.envoyproxy.io/docs/envoy/latest/api-v2/config/filter/network/http_connection_manager/v2/http_connection_manager.proto.html
+// See https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto
 func (b *httpConnectionManagerBuilder) Get() *envoy_listener_v3.Filter {
 	// For now, failing validation is a programmer error that
 	// the caller can't reasonably recover from. A caller that can
@@ -351,7 +370,8 @@ func (b *httpConnectionManagerBuilder) Get() *envoy_listener_v3.Filter {
 		HttpProtocolOptions: &envoy_core_v3.Http1ProtocolOptions{
 			// Enable support for HTTP/1.0 requests that carry
 			// a Host: header. See #537.
-			AcceptHttp_10: true,
+			AcceptHttp_10:      true,
+			AllowChunkedLength: b.allowChunkedLength,
 		},
 		UseRemoteAddress: protobuf.Bool(true),
 		NormalizePath:    protobuf.Bool(true),
@@ -405,6 +425,7 @@ func HTTPConnectionManager(routename string, accesslogger []*accesslog.AccessLog
 		Get()
 }
 
+// HTTPConnectionManagerBuilder creates a new HTTP connection manager builder.
 func HTTPConnectionManagerBuilder() *httpConnectionManagerBuilder {
 	return &httpConnectionManagerBuilder{}
 }
@@ -584,10 +605,10 @@ func FilterExternalAuthz(authzClusterName string, failOpen bool, timeout timeout
 		},
 		MetadataContextNamespaces: []string{},
 		IncludePeerCertificate:    true,
+		// TODO(jpeach): When we move to the Envoy v4 API, propagate the
+		// `transport_api_version` from ExtensionServiceSpec ProtocolVersion.
+		TransportApiVersion: envoy_core_v3.ApiVersion_V3,
 	}
-
-	// TODO(jpeach): When we move to the Envoy v3 API, propagate the
-	// `transport_api_version` from ExtensionServiceSpec ProtocolVersion.
 
 	return &http.HttpFilter{
 		Name: "envoy.filters.http.ext_authz",

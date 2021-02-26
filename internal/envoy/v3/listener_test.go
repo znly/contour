@@ -21,6 +21,7 @@ import (
 	envoy_core_v3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_listener_v3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	envoy_compressor_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/compressor/v3"
+	envoy_config_filter_http_local_ratelimit_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/local_ratelimit/v3"
 	http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	envoy_tcp_proxy_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	envoy_tls_v3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -196,15 +197,17 @@ func TestDownstreamTLSContext(t *testing.T) {
 	}
 
 	tlsParams := &envoy_tls_v3.TlsParameters{
-		TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_1,
+		TlsMinimumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_2,
 		TlsMaximumProtocolVersion: envoy_tls_v3.TlsParameters_TLSv1_3,
 		CipherSuites: []string{
 			"[ECDHE-ECDSA-AES128-GCM-SHA256|ECDHE-ECDSA-CHACHA20-POLY1305]",
 			"[ECDHE-RSA-AES128-GCM-SHA256|ECDHE-RSA-CHACHA20-POLY1305]",
 			"ECDHE-ECDSA-AES128-SHA",
+			"ECDHE-RSA-AES128-SHA",
 			"ECDHE-ECDSA-AES256-GCM-SHA384",
 			"ECDHE-RSA-AES256-GCM-SHA384",
 			"ECDHE-ECDSA-AES256-SHA",
+			"ECDHE-RSA-AES256-SHA",
 		},
 	}
 
@@ -274,7 +277,7 @@ func TestDownstreamTLSContext(t *testing.T) {
 		want *envoy_tls_v3.DownstreamTlsContext
 	}{
 		"TLS context without client authentication": {
-			DownstreamTLSContext(serverSecret, envoy_tls_v3.TlsParameters_TLSv1_1, nil, "h2", "http/1.1"),
+			DownstreamTLSContext(serverSecret, envoy_tls_v3.TlsParameters_TLSv1_2, nil, "h2", "http/1.1"),
 			&envoy_tls_v3.DownstreamTlsContext{
 				CommonTlsContext: &envoy_tls_v3.CommonTlsContext{
 					TlsParams:                      tlsParams,
@@ -284,7 +287,7 @@ func TestDownstreamTLSContext(t *testing.T) {
 			},
 		},
 		"TLS context with client authentication": {
-			DownstreamTLSContext(serverSecret, envoy_tls_v3.TlsParameters_TLSv1_1, peerValidationContext, "h2", "http/1.1"),
+			DownstreamTLSContext(serverSecret, envoy_tls_v3.TlsParameters_TLSv1_2, peerValidationContext, "h2", "http/1.1"),
 			&envoy_tls_v3.DownstreamTlsContext{
 				CommonTlsContext: &envoy_tls_v3.CommonTlsContext{
 					TlsParams:                      tlsParams,
@@ -296,7 +299,7 @@ func TestDownstreamTLSContext(t *testing.T) {
 			},
 		},
 		"Downstream validation shall not support subjectName validation": {
-			DownstreamTLSContext(serverSecret, envoy_tls_v3.TlsParameters_TLSv1_1, peerValidationContextWithSubjectName, "h2", "http/1.1"),
+			DownstreamTLSContext(serverSecret, envoy_tls_v3.TlsParameters_TLSv1_2, peerValidationContextWithSubjectName, "h2", "http/1.1"),
 			&envoy_tls_v3.DownstreamTlsContext{
 				CommonTlsContext: &envoy_tls_v3.CommonTlsContext{
 					TlsParams:                      tlsParams,
@@ -325,6 +328,7 @@ func TestHTTPConnectionManager(t *testing.T) {
 		streamIdleTimeout             timeout.Setting
 		maxConnectionDuration         timeout.Setting
 		connectionShutdownGracePeriod timeout.Setting
+		allowChunkedLength            bool
 		want                          *envoy_listener_v3.Filter
 	}{
 		"default": {
@@ -381,6 +385,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								TypedConfig: &any.Any{
 									TypeUrl: HTTPFilterCORS,
 								},
+							},
+						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
 							},
 						}, {
 							Name: "router",
@@ -462,6 +475,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								},
 							},
 						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
+							},
+						}, {
 							Name: "router",
 							ConfigType: &http.HttpFilter_TypedConfig{
 								TypedConfig: &any.Any{
@@ -540,6 +562,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								TypedConfig: &any.Any{
 									TypeUrl: HTTPFilterCORS,
 								},
+							},
+						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
 							},
 						}, {
 							Name: "router",
@@ -623,6 +654,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								},
 							},
 						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
+							},
+						}, {
 							Name: "router",
 							ConfigType: &http.HttpFilter_TypedConfig{
 								TypedConfig: &any.Any{
@@ -701,6 +741,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								TypedConfig: &any.Any{
 									TypeUrl: HTTPFilterCORS,
 								},
+							},
+						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
 							},
 						}, {
 							Name: "router",
@@ -784,6 +833,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								},
 							},
 						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
+							},
+						}, {
 							Name: "router",
 							ConfigType: &http.HttpFilter_TypedConfig{
 								TypedConfig: &any.Any{
@@ -863,6 +921,15 @@ func TestHTTPConnectionManager(t *testing.T) {
 								},
 							},
 						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
+							},
+						}, {
 							Name: "router",
 							ConfigType: &http.HttpFilter_TypedConfig{
 								TypedConfig: &any.Any{
@@ -874,6 +941,97 @@ func TestHTTPConnectionManager(t *testing.T) {
 							// Enable support for HTTP/1.0 requests that carry
 							// a Host: header. See #537.
 							AcceptHttp_10: true,
+						},
+						CommonHttpProtocolOptions: &envoy_core_v3.HttpProtocolOptions{},
+						AccessLog:                 FileAccessLogEnvoy("/dev/stdout"),
+						UseRemoteAddress:          protobuf.Bool(true),
+						NormalizePath:             protobuf.Bool(true),
+						PreserveExternalRequestId: true,
+						MergeSlashes:              true,
+						DrainTimeout:              protobuf.Duration(90 * time.Second),
+					}),
+				},
+			},
+		},
+		"enable allow_chunked_length": {
+			routename:                     "default/kuard",
+			accesslogger:                  FileAccessLogEnvoy("/dev/stdout"),
+			connectionShutdownGracePeriod: timeout.DurationSetting(90 * time.Second),
+			allowChunkedLength:            true,
+			want: &envoy_listener_v3.Filter{
+				Name: wellknown.HTTPConnectionManager,
+				ConfigType: &envoy_listener_v3.Filter_TypedConfig{
+					TypedConfig: protobuf.MustMarshalAny(&http.HttpConnectionManager{
+						StatPrefix: "default/kuard",
+						RouteSpecifier: &http.HttpConnectionManager_Rds{
+							Rds: &http.Rds{
+								RouteConfigName: "default/kuard",
+								ConfigSource: &envoy_core_v3.ConfigSource{
+									ResourceApiVersion: envoy_core_v3.ApiVersion_V3,
+									ConfigSourceSpecifier: &envoy_core_v3.ConfigSource_ApiConfigSource{
+										ApiConfigSource: &envoy_core_v3.ApiConfigSource{
+											ApiType:             envoy_core_v3.ApiConfigSource_GRPC,
+											TransportApiVersion: envoy_core_v3.ApiVersion_V3,
+											GrpcServices: []*envoy_core_v3.GrpcService{{
+												TargetSpecifier: &envoy_core_v3.GrpcService_EnvoyGrpc_{
+													EnvoyGrpc: &envoy_core_v3.GrpcService_EnvoyGrpc{
+														ClusterName: "contour",
+													},
+												},
+											}},
+										},
+									},
+								},
+							},
+						},
+						HttpFilters: []*http.HttpFilter{{
+							Name: "compressor",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(&envoy_compressor_v3.Compressor{
+									CompressorLibrary: &envoy_core_v3.TypedExtensionConfig{
+										Name: "gzip",
+										TypedConfig: &any.Any{
+											TypeUrl: HTTPFilterGzip,
+										},
+									},
+								}),
+							},
+						}, {
+							Name: "grpcweb",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: &any.Any{
+									TypeUrl: HTTPFilterGrpcWeb,
+								},
+							},
+						}, {
+							Name: "cors",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: &any.Any{
+									TypeUrl: HTTPFilterCORS,
+								},
+							},
+						}, {
+							Name: "local_ratelimit",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: protobuf.MustMarshalAny(
+									&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+										StatPrefix: "http",
+									},
+								),
+							},
+						}, {
+							Name: "router",
+							ConfigType: &http.HttpFilter_TypedConfig{
+								TypedConfig: &any.Any{
+									TypeUrl: HTTPFilterRouter,
+								},
+							},
+						}},
+						HttpProtocolOptions: &envoy_core_v3.Http1ProtocolOptions{
+							// Enable support for HTTP/1.0 requests that carry
+							// a Host: header. See #537.
+							AcceptHttp_10:      true,
+							AllowChunkedLength: true,
 						},
 						CommonHttpProtocolOptions: &envoy_core_v3.HttpProtocolOptions{},
 						AccessLog:                 FileAccessLogEnvoy("/dev/stdout"),
@@ -898,6 +1056,7 @@ func TestHTTPConnectionManager(t *testing.T) {
 				StreamIdleTimeout(tc.streamIdleTimeout).
 				MaxConnectionDuration(tc.maxConnectionDuration).
 				ConnectionShutdownGracePeriod(tc.connectionShutdownGracePeriod).
+				AllowChunkedLength(tc.allowChunkedLength).
 				DefaultFilters().
 				Get()
 
@@ -1152,6 +1311,16 @@ func TestAddFilter(t *testing.T) {
 						TypedConfig: &any.Any{
 							TypeUrl: HTTPFilterCORS,
 						},
+					},
+				},
+				{
+					Name: "local_ratelimit",
+					ConfigType: &http.HttpFilter_TypedConfig{
+						TypedConfig: protobuf.MustMarshalAny(
+							&envoy_config_filter_http_local_ratelimit_v3.LocalRateLimit{
+								StatPrefix: "http",
+							},
+						),
 					},
 				},
 				FilterExternalAuthz("test", false, timeout.Setting{}),

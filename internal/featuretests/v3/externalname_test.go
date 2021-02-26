@@ -30,7 +30,6 @@ import (
 	"k8s.io/utils/pointer"
 )
 
-// Assert that services of type v1.ServiceTypeExternalName can be
 // referenced by an Ingress, or HTTPProxy document.
 func TestExternalNameService(t *testing.T) {
 	rh, c, done := setup(t)

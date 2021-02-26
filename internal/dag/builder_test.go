@@ -2817,6 +2817,115 @@ func TestDAGInsert(t *testing.T) {
 		},
 	}
 
+	proxyCookieLoadBalancer := &contour_api_v1.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: contour_api_v1.HTTPProxySpec{
+			VirtualHost: &contour_api_v1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []contour_api_v1.Route{{
+				Conditions: []contour_api_v1.MatchCondition{{
+					Prefix: "/",
+				}},
+				Services: []contour_api_v1.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				LoadBalancerPolicy: &contour_api_v1.LoadBalancerPolicy{
+					Strategy: "Cookie",
+				},
+			}},
+		},
+	}
+
+	proxyLoadBalancerHashPolicyHeader := &contour_api_v1.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: contour_api_v1.HTTPProxySpec{
+			VirtualHost: &contour_api_v1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []contour_api_v1.Route{{
+				Conditions: []contour_api_v1.MatchCondition{{
+					Prefix: "/",
+				}},
+				Services: []contour_api_v1.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				LoadBalancerPolicy: &contour_api_v1.LoadBalancerPolicy{
+					Strategy: "RequestHash",
+					RequestHashPolicies: []contour_api_v1.RequestHashPolicy{
+						{
+							Terminal: true,
+							HeaderHashOptions: &contour_api_v1.HeaderHashOptions{
+								HeaderName: "X-Some-Header",
+							},
+						},
+						{
+							// Lower case but duplicated, should be ignored.
+							HeaderHashOptions: &contour_api_v1.HeaderHashOptions{
+								HeaderName: "x-some-header",
+							},
+						},
+						{
+							HeaderHashOptions: nil,
+						},
+						{
+							HeaderHashOptions: &contour_api_v1.HeaderHashOptions{
+								HeaderName: "X-Some-Other-Header",
+							},
+						},
+						{
+							HeaderHashOptions: &contour_api_v1.HeaderHashOptions{
+								HeaderName: "",
+							},
+						},
+					},
+				},
+			}},
+		},
+	}
+
+	proxyLoadBalancerHashPolicyHeaderAllInvalid := &contour_api_v1.HTTPProxy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "example-com",
+			Namespace: "default",
+		},
+		Spec: contour_api_v1.HTTPProxySpec{
+			VirtualHost: &contour_api_v1.VirtualHost{
+				Fqdn: "example.com",
+			},
+			Routes: []contour_api_v1.Route{{
+				Conditions: []contour_api_v1.MatchCondition{{
+					Prefix: "/",
+				}},
+				Services: []contour_api_v1.Service{{
+					Name: "nginx",
+					Port: 80,
+				}},
+				LoadBalancerPolicy: &contour_api_v1.LoadBalancerPolicy{
+					Strategy: "RequestHash",
+					RequestHashPolicies: []contour_api_v1.RequestHashPolicy{
+						{
+							HeaderHashOptions: nil,
+						},
+						{
+							HeaderHashOptions: &contour_api_v1.HeaderHashOptions{
+								HeaderName: "",
+							},
+						},
+					},
+				},
+			}},
+		},
+	}
+
 	// proxy109 has a route that rewrites headers.
 	proxy109 := &contour_api_v1.HTTPProxy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -5410,6 +5519,85 @@ func TestDAGInsert(t *testing.T) {
 				},
 			),
 		},
+		"insert proxy with cookie load balancing strategy": {
+			objs: []interface{}{
+				proxyCookieLoadBalancer,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathMatchCondition: prefix("/"),
+							Clusters: []*Cluster{
+								{Upstream: service(s9), LoadBalancerPolicy: "Cookie"},
+							},
+							RequestHashPolicies: []RequestHashPolicy{
+								{
+									CookieHashOptions: &CookieHashOptions{
+										CookieName: "X-Contour-Session-Affinity",
+										TTL:        time.Duration(0),
+										Path:       "/",
+									},
+								},
+							},
+						}),
+					),
+				},
+			),
+		},
+		"insert proxy with load balancer request header hash policies": {
+			objs: []interface{}{
+				proxyLoadBalancerHashPolicyHeader,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathMatchCondition: prefix("/"),
+							Clusters: []*Cluster{
+								{Upstream: service(s9), LoadBalancerPolicy: "RequestHash"},
+							},
+							RequestHashPolicies: []RequestHashPolicy{
+								{
+									Terminal: true,
+									HeaderHashOptions: &HeaderHashOptions{
+										HeaderName: "X-Some-Header",
+									},
+								},
+								{
+									HeaderHashOptions: &HeaderHashOptions{
+										HeaderName: "X-Some-Other-Header",
+									},
+								},
+							},
+						}),
+					),
+				},
+			),
+		},
+		"insert proxy with all invalid request header hash policies": {
+			objs: []interface{}{
+				proxyLoadBalancerHashPolicyHeaderAllInvalid,
+				s9,
+			},
+			want: listeners(
+				&Listener{
+					Port: 80,
+					VirtualHosts: virtualhosts(
+						virtualhost("example.com", &Route{
+							PathMatchCondition: prefix("/"),
+							Clusters: []*Cluster{
+								{Upstream: service(s9), LoadBalancerPolicy: "RoundRobin"},
+							},
+						}),
+					),
+				},
+			),
+		},
 		"httpproxy with fallback certificate enabled": {
 			fallbackCertificateName:      "fallbacksecret",
 			fallbackCertificateNamespace: "default",
@@ -6260,6 +6448,7 @@ func TestValidateHeaderAlteration(t *testing.T) {
 	tests := []struct {
 		name    string
 		in      *contour_api_v1.HeadersPolicy
+		dyn     map[string]string
 		want    *HeadersPolicy
 		wantErr error
 	}{{
@@ -6275,6 +6464,9 @@ func TestValidateHeaderAlteration(t *testing.T) {
 				Value: "blah",
 			}},
 			Remove: []string{"K-Nada"},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
 		},
 		want: &HeadersPolicy{
 			Set: map[string]string{
@@ -6294,11 +6486,17 @@ func TestValidateHeaderAlteration(t *testing.T) {
 				Value: "blah",
 			}},
 		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
+		},
 		wantErr: errors.New(`duplicate header addition: "K-Foo"`),
 	}, {
 		name: "duplicate remove",
 		in: &contour_api_v1.HeadersPolicy{
 			Remove: []string{"K-Foo", "k-foo"},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
 		},
 		wantErr: errors.New(`duplicate header removal: "K-Foo"`),
 	}, {
@@ -6309,11 +6507,17 @@ func TestValidateHeaderAlteration(t *testing.T) {
 				Value: "bar",
 			}},
 		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
+		},
 		wantErr: errors.New(`invalid set header "  K-Foo": [a valid HTTP header must consist of alphanumeric characters or '-' (e.g. 'X-Header-Name', regex used for validation is '[-A-Za-z0-9]+')]`),
 	}, {
 		name: "invalid remove header",
 		in: &contour_api_v1.HeadersPolicy{
 			Remove: []string{"  K-Foo"},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
 		},
 		wantErr: errors.New(`invalid remove header "  K-Foo": [a valid HTTP header must consist of alphanumeric characters or '-' (e.g. 'X-Header-Name', regex used for validation is '[-A-Za-z0-9]+')]`),
 	}, {
@@ -6323,6 +6527,9 @@ func TestValidateHeaderAlteration(t *testing.T) {
 				Name:  "Host",
 				Value: "bar",
 			}},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
 		},
 		wantErr: errors.New(`rewriting "Host" header is not supported`),
 	}, {
@@ -6335,22 +6542,59 @@ func TestValidateHeaderAlteration(t *testing.T) {
 				Name:  "Lot-Of-Percents",
 				Value: "%%%%%",
 			}, {
-				Name:  "k-baz", // This gets canonicalized
-				Value: "%DOWNSTREAM_LOCAL_ADDRESS%",
+				Name:  "k-baz",                      // This gets canonicalized
+				Value: "%DOWNSTREAM_LOCAL_ADDRESS%", // This is a known Envoy dynamic header
 			}},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
 		},
 		want: &HeadersPolicy{
 			Set: map[string]string{
 				"K-Foo":           "100%%",
-				"K-Baz":           "%%DOWNSTREAM_LOCAL_ADDRESS%%",
+				"K-Baz":           "%DOWNSTREAM_LOCAL_ADDRESS%",
 				"Lot-Of-Percents": "%%%%%%%%%%",
+			},
+		},
+	}, {
+		name: "dynamic service headers",
+		in: &contour_api_v1.HeadersPolicy{
+			Set: []contour_api_v1.HeaderValue{{
+				Name:  "l5d-dst-override",
+				Value: "%CONTOUR_SERVICE_NAME%.%CONTOUR_NAMESPACE%.svc.cluster.local:%CONTOUR_SERVICE_PORT%",
+			}},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE":    "myns",
+			"CONTOUR_SERVICE_NAME": "myservice",
+			"CONTOUR_SERVICE_PORT": "80",
+		},
+		want: &HeadersPolicy{
+			Set: map[string]string{
+				"L5d-Dst-Override": "myservice.myns.svc.cluster.local:80",
+			},
+		},
+	}, {
+		name: "dynamic service headers without service name and port",
+		in: &contour_api_v1.HeadersPolicy{
+			Set: []contour_api_v1.HeaderValue{{
+				Name:  "l5d-dst-override",
+				Value: "%CONTOUR_SERVICE_NAME%.%CONTOUR_NAMESPACE%.svc.cluster.local:%CONTOUR_SERVICE_PORT%",
+			}},
+		},
+		dyn: map[string]string{
+			"CONTOUR_NAMESPACE": "myns",
+		},
+		want: &HeadersPolicy{
+			Set: map[string]string{
+				"L5d-Dst-Override": "%%CONTOUR_SERVICE_NAME%%.myns.svc.cluster.local:%%CONTOUR_SERVICE_PORT%%",
 			},
 		},
 	}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, gotErr := headersPolicyService(test.in)
+			got, gotErr := headersPolicyService(test.in, test.dyn)
 			assert.Equal(t, test.want, got)
 			assert.Equal(t, test.wantErr, gotErr)
 		})

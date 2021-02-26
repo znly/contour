@@ -291,6 +291,7 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 		MaxConnectionDuration:         maxConnectionDuration,
 		ConnectionShutdownGracePeriod: connectionShutdownGracePeriod,
 		DefaultHTTPVersions:           parseDefaultHTTPVersions(ctx.Config.DefaultHTTPVersions),
+		AllowChunkedLength:            !ctx.Config.DisableAllowChunkedLength,
 	}
 
 	contourMetrics := metrics.NewMetrics(registry)
@@ -340,6 +341,7 @@ func doServe(log logrus.FieldLogger, ctx *serveContext) error {
 					DNSLookupFamily:       ctx.Config.Cluster.DNSLookupFamily,
 					ClientCertificate:     clientCert,
 				},
+				&dag.ServiceAPIsProcessor{},
 				&dag.ListenerProcessor{},
 			},
 		},

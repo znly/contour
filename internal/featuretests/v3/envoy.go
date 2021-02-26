@@ -112,7 +112,7 @@ func routeHostRewrite(cluster, newHostName string) *envoy_route_v3.Route_Route {
 	return &envoy_route_v3.Route_Route{
 		Route: &envoy_route_v3.RouteAction{
 			ClusterSpecifier:     &envoy_route_v3.RouteAction_Cluster{Cluster: cluster},
-			HostRewriteSpecifier: &envoy_route_v3.RouteAction_HostRewriteHeader{HostRewriteHeader: newHostName},
+			HostRewriteSpecifier: &envoy_route_v3.RouteAction_HostRewriteLiteral{HostRewriteLiteral: newHostName},
 		},
 	}
 }
@@ -238,6 +238,25 @@ func withSessionAffinity(route *envoy_route_v3.Route_Route) *envoy_route_v3.Rout
 			},
 		},
 	})
+	return route
+}
+
+type headerTerminalPair struct {
+	headerName string
+	terminal   bool
+}
+
+func withRequestHashPolicyHeader(route *envoy_route_v3.Route_Route, headerOptions ...headerTerminalPair) *envoy_route_v3.Route_Route {
+	for _, htp := range headerOptions {
+		route.Route.HashPolicy = append(route.Route.HashPolicy, &envoy_route_v3.RouteAction_HashPolicy{
+			Terminal: htp.terminal,
+			PolicySpecifier: &envoy_route_v3.RouteAction_HashPolicy_Header_{
+				Header: &envoy_route_v3.RouteAction_HashPolicy_Header{
+					HeaderName: htp.headerName,
+				},
+			},
+		})
+	}
 	return route
 }
 
