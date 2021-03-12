@@ -586,6 +586,7 @@ func FilterExternalAuthz(authzClusterName string, failOpen bool, timeout timeout
 				TargetSpecifier: &envoy_core_v3.GrpcService_EnvoyGrpc_{
 					EnvoyGrpc: &envoy_core_v3.GrpcService_EnvoyGrpc{
 						ClusterName: authzClusterName,
+						Authority:   "znly.co",
 					},
 				},
 				Timeout: envoy.Timeout(timeout),
